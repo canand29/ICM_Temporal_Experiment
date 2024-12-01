@@ -9,16 +9,12 @@ import torch.nn.functional as F
 import numpy as np
 
 from torch.optim import AdamW
-from Solvers.Abstract_Solver import AbstractSolver
+from Solvers.Abstract_Solver import AbstractSolver, Statistics
 from lib import plotting
 import cv2
 
 
 class QFunction(nn.Module):
-    """
-    Q-network definition for image inputs using convolutional layers.
-    """
-
     def __init__(self, in_channels, num_actions):
         super(QFunction, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
@@ -29,38 +25,103 @@ class QFunction(nn.Module):
 
     def forward(self, x):
         # x should be of shape [batch_size, channels, height, width]
-        x = x / 255.0  # Normalize pixel values to [0, 1]
+        x = x / 255.0  # Normalize pixel values
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)  # Flatten
+        x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         return self.fc2(x)
 
 
-class DQN(AbstractSolver):
+class FeatureExtractor(nn.Module):
+    def __init__(self, in_channels, feature_dim):
+        super(FeatureExtractor, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
+        self.fc = nn.Linear(7 * 7 * 32, feature_dim)
+
+    def forward(self, x):
+        x = x / 255.0  # Normalize pixel values
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)  # No activation
+        return x
+
+
+class InverseModel(nn.Module):
+    def __init__(self, feature_dim, act_dim):
+        super(InverseModel, self).__init__()
+        self.fc1 = nn.Linear(2 * feature_dim, 256)
+        self.fc2 = nn.Linear(256, act_dim)
+
+    def forward(self, phi_s, phi_next_s):
+        x = torch.cat([phi_s, phi_next_s], dim=-1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x  # Output logits over actions
+
+
+class ForwardModel(nn.Module):
+    def __init__(self, feature_dim, act_dim):
+        super(ForwardModel, self).__init__()
+        self.fc1 = nn.Linear(feature_dim + act_dim, 256)
+        self.fc2 = nn.Linear(256, feature_dim)
+
+    def forward(self, phi_s, a_onehot):
+        x = torch.cat([phi_s, a_onehot], dim=-1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x  # Predicts phi(s_{t+1})
+
+
+class DQN_ICM(AbstractSolver):
     def __init__(self, env, eval_env, options):
+        # Initialize parent class
         super().__init__(env, eval_env, options)
         self.state_shape = (4, 84, 84)  # For stacking 4 frames
         self.frame_stack = deque(maxlen=4)
         act_dim = env.action_space.n
 
         in_channels = self.state_shape[0]  # 4 stacked frames
+        num_actions = act_dim
 
         # Initialize Q-network and target network
-        self.model = QFunction(in_channels, act_dim)
+        self.model = QFunction(
+            in_channels,
+            num_actions,
+        )
         self.target_model = deepcopy(self.model)
         self.target_model.eval()  # Set target model to evaluation mode
 
+        # Initialize ICM components
+        self.feature_dim = 256  # Adjust as needed
+        self.feature_extractor = FeatureExtractor(
+            in_channels, self.feature_dim
+        )
+        self.inverse_model = InverseModel(
+            self.feature_dim, act_dim
+        )
+        self.forward_model = ForwardModel(
+            self.feature_dim, act_dim
+        )
+
         # Initialize optimizer
         self.optimizer = AdamW(
-            self.model.parameters(),
+            list(self.model.parameters())
+            + list(self.feature_extractor.parameters())
+            + list(self.inverse_model.parameters())
+            + list(self.forward_model.parameters()),
             lr=self.options.alpha,
             amsgrad=True,
         )
 
-        # Loss function
+        # Loss functions
         self.loss_fn = nn.SmoothL1Loss()
+        self.ce_loss = nn.CrossEntropyLoss()
 
         # Freeze target network parameters
         for p in self.target_model.parameters():
@@ -69,36 +130,29 @@ class DQN(AbstractSolver):
         # Replay buffer
         self.replay_memory = deque(maxlen=options.replay_memory_size)
 
+        # ICM hyperparameters
+        self.icm_beta = options.icm_beta
+        self.icm_eta = options.icm_eta
+
         # Steps counter
         self.n_steps = 0
-
-        # Initialize device (MPS for Mac GPUs)
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-
-        # Move models to device
-        self.model.to(self.device)
-        self.target_model.to(self.device)
 
     def preprocess(self, state):
         # Convert to grayscale and resize
         state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
         state = cv2.resize(state, (84, 84))
-        state = state.astype(np.float32)
         return state
 
-    def stack_frames(self, state, is_new_episode):
+    def stack_frames(self, state, is_new_episode, frame_stack):
         processed_state = self.preprocess(state)
         if is_new_episode:
-            self.frame_stack.clear()
+            frame_stack.clear()
             for _ in range(4):
-                self.frame_stack.append(processed_state)
+                frame_stack.append(processed_state)
         else:
-            self.frame_stack.append(processed_state)
+            frame_stack.append(processed_state)
         # Stack frames along axis 0 (channels)
-        stacked_state = np.stack(self.frame_stack, axis=0)
+        stacked_state = np.stack(frame_stack, axis=0)
         return stacked_state  # Shape: [channels, height, width]
 
     def update_target_model(self):
@@ -106,7 +160,7 @@ class DQN(AbstractSolver):
         self.target_model.load_state_dict(self.model.state_dict())
 
     def epsilon_greedy(self, state):
-        state = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)  # Add batch dimension
+        state = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
         q_vals = self.model(state)
         best_action = torch.argmax(q_vals).item()
         action_probs = np.ones(self.env.action_space.n) * self.options.epsilon / self.env.action_space.n
@@ -136,49 +190,76 @@ class DQN(AbstractSolver):
             next_states = np.stack(next_states)
 
             # Convert numpy arrays to torch tensors
-            states = torch.as_tensor(states, dtype=torch.float32).to(self.device)
-            next_states = torch.as_tensor(next_states, dtype=torch.float32).to(self.device)
-            actions = torch.as_tensor(actions, dtype=torch.long).to(self.device)
-            rewards = torch.as_tensor(rewards, dtype=torch.float32).to(self.device)
-            dones = torch.as_tensor(dones, dtype=torch.float32).to(self.device)
+            states = torch.as_tensor(states, dtype=torch.float32)
+            next_states = torch.as_tensor(next_states, dtype=torch.float32)
+            actions = torch.as_tensor(actions, dtype=torch.long)
+            rewards = torch.as_tensor(rewards, dtype=torch.float32)
+            dones = torch.as_tensor(dones, dtype=torch.float32)
+
+            # Compute features using the feature extractor
+            phi_s = self.feature_extractor(states)
+            phi_next_s = self.feature_extractor(next_states)
+
+            # One-hot encode actions
+            action_onehot = F.one_hot(actions, num_classes=self.env.action_space.n).float()
+
+            # Inverse model prediction
+            inv_logits = self.inverse_model(phi_s, phi_next_s)
+            # Inverse loss
+            inv_loss = self.ce_loss(inv_logits, actions)
+
+            # Forward model prediction
+            pred_phi_next_s = self.forward_model(phi_s, action_onehot)
+            # Forward loss
+            forward_loss = 0.5 * ((phi_next_s - pred_phi_next_s) ** 2).sum(dim=1)
+            forward_loss_mean = forward_loss.mean()
+
+            # Intrinsic reward is the prediction error of the forward model
+            intrinsic_reward = forward_loss.detach()
+
+            # Total ICM loss
+            icm_loss = self.icm_beta * forward_loss_mean + (1 - self.icm_beta) * inv_loss
+
+            # Scale intrinsic reward and add to extrinsic reward
+            total_reward = rewards + self.icm_eta * intrinsic_reward
 
             # Current Q-values
             q_values = self.model(states)
             current_q = q_values.gather(1, actions.unsqueeze(1)).squeeze(-1)
 
-            # Compute target Q-values
-            target_q = self.compute_target_values(next_states, rewards, dones)
+            target_q = self.compute_target_values(next_states, total_reward, dones)
 
-            # Compute loss
-            loss = self.loss_fn(current_q, target_q)
+            # Q-learning loss
+            loss_q = self.loss_fn(current_q, target_q)
 
-            # Optimize the network
+            # Total loss (Q-learning loss + ICM loss)
+            total_loss = loss_q + icm_loss
+
+            # Optimize the networks
             self.optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10)
             self.optimizer.step()
 
     def train_episode(self):
         state, _ = self.env.reset()
-        state = self.stack_frames(state, is_new_episode=True)
-        total_reward = 0
-        total_steps = 0
+        state = self.stack_frames(state, is_new_episode=True, frame_stack=self.frame_stack)
         rows = []
 
-        while True:
+        for _ in range(self.options.steps):
             action_probs = self.epsilon_greedy(state)
             action = np.random.choice(len(action_probs), p=action_probs)
             next_state, reward, done, _, _ = self.env.step(action)
-            next_state = self.stack_frames(next_state, is_new_episode=False)
+            next_state = self.stack_frames(next_state, is_new_episode=False, frame_stack=self.frame_stack)
             self.memorize(state, action, reward, next_state, done)
             self.replay()
             if self.n_steps % self.options.update_target_estimator_every == 0:
                 self.update_target_model()
             self.n_steps += 1
-            total_reward += reward
-            total_steps += 1
             state = next_state
 
+            # print(f"Step {self.n_steps}, Action taken: {action}, Reward received: {reward}")
+            # Append row to memory
             rows.append([self.n_steps, action, reward, done])
 
             # Write rows to file at the end of the episode
@@ -188,40 +269,37 @@ class DQN(AbstractSolver):
                     writer.writerow(["Step", "Action", "Reward", "Done"])  # Write header if empty
                 writer.writerows(rows)
 
-            if done or total_steps >= self.options.steps:
+            if done:
                 break
 
-        # Update statistics
-        # self.statistics["Episode Rewards"].append(total_reward)
-        # self.statistics["Episode Length"].append(total_steps)
-
     def run_greedy(self):
+        self.statistics[Statistics.Evaluation.value] += 1
         state, _ = self.eval_env.reset()
-        eval_frame_stack = deque(maxlen=4)
-        state = self.stack_frames(state, is_new_episode=True)
+        self.eval_frame_stack = deque(maxlen=4)
+        state = self.stack_frames(state, is_new_episode=True, frame_stack=self.eval_frame_stack)
         total_reward = 0
         step = 0
         done = False
         while not done and step < self.options.steps:
-            state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+            state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
             q_values = self.model(state_tensor)
             action = torch.argmax(q_values).item()
             next_state, reward, done, _, _ = self.eval_env.step(action)
-            state = self.stack_frames(next_state, is_new_episode=False)
+            state = self.stack_frames(next_state, is_new_episode=False, frame_stack=self.eval_frame_stack)
             total_reward += reward
             step += 1
         print(f"Total reward in evaluation: {total_reward}")
 
     def __str__(self):
-        return "DQN Baseline"
+        return "DQN with ICM"
 
     def plot(self, stats, smoothing_window, final=False):
         plotting.plot_episode_stats(stats, smoothing_window, final=final)
 
     def create_greedy_policy(self):
         def policy_fn(state):
-            state = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+            state = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
             q_values = self.model(state)
-            return torch.argmax(q_values).detach().cpu().numpy()
+            return torch.argmax(q_values).detach().numpy()
 
         return policy_fn

@@ -172,6 +172,28 @@ def build_parser():
         default=False,
         action="store_true",
     )
+    parser.add_option(
+        "--icm_beta",
+        dest="icm_beta",
+        type="float",
+        default=0.2,
+        help="ICM weighting factor between inverse and forward loss (beta)"
+    )
+    parser.add_option(
+        "--icm_eta",
+        dest="icm_eta",
+        type="float",
+        default=0.01,
+        help="ICM scaling factor for intrinsic reward (eta)"
+    )
+
+    parser.add_option(
+        "--icm_include_time",
+        dest="icm_include_time",
+        action="store_true",
+        default=False,
+        help="Include time as a factor in the ICM module."
+    )
     return parser
 
 
@@ -181,7 +203,7 @@ def readCommand(argv):
     return options
 
 
-def getEnv(domain, render_mode=""):
+def getEnv(domain, render_mode=None):
     if domain == "Blackjack":
         return BlackjackEnv()
     elif domain == "Gridworld":
@@ -190,6 +212,15 @@ def getEnv(domain, render_mode=""):
         return CliffWalkingEnv()
     elif domain == "WindyGridworld":
         return WindyGridworldEnv()
+    elif domain == "MontezumaRevenge":
+        if not render_mode:
+            render_mode = 'rgb_array'
+            # Keep it None for DQN only otherwise rgb_array
+        return gym.make("ALE/MontezumaRevenge-v5", render_mode=None)
+    elif domain == "Breakout":
+        if not render_mode:
+            render_mode = 'rgb_array'
+        return gym.make("ALE/Breakout-v5", render_mode=None)
     else:
         try:
             return gym.make(domain, render_mode=render_mode)
