@@ -19,7 +19,7 @@ For setting up the environment, we recommend using conda + pip or virtual env + 
 pip install -r requirements.txt
 ```
 
-The commands to run the 3 different mode are here:
+The commands to run the 3 different models are here:
 1) DQN model
 ```bash
 python run.py -s dqn -d MontezumaRevenge -e 1000
