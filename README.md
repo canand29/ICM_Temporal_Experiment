@@ -18,3 +18,19 @@ For setting up the environment, we recommend using conda + pip or virtual env + 
 ```bash
 pip install -r requirements.txt
 ```
+
+The commands to run the 3 different mode are here:
+1) DQN model
+```bash
+python run.py -s dqn -d MontezumaRevenge -e 1000
+```
+
+2) DQN + ICM model
+```bash
+python run.py -s dqn_icm -d MontezumaRevenge -e 1000 -t 2500 --icm_beta 0.2 --icm_eta 0.01
+```
+3) DQN + ICM temporally enhanced model
+```bash
+python run.py -s dqn_icm_temporal -d MontezumaRevenge -e 1000 -t 2500 --icm_beta 0.2 --icm_eta 0.01
+```
+

@@ -71,7 +71,7 @@ class InverseModel(nn.Module):
         x = torch.cat([phi_s, phi_next_s], dim=-1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        return x  # Output logits over actions
+        return x
 
 
 class ForwardModel(nn.Module):
