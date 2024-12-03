@@ -218,8 +218,6 @@ def getEnv(domain, render_mode=None):
             # Keep it None for DQN only otherwise rgb_array
         return gym.make("ALE/MontezumaRevenge-v5", render_mode=None)
     elif domain == "Breakout":
-        if not render_mode:
-            render_mode = 'rgb_array'
         return gym.make("ALE/Breakout-v5", render_mode=None)
     else:
         try:
