@@ -34,3 +34,7 @@ python run.py -s dqn_icm -d MontezumaRevenge -e 1000 -t 2500 --icm_beta 0.2 --ic
 python run.py -s dqn_icm_temporal -d MontezumaRevenge -e 1000 -t 2500 --icm_beta 0.2 --icm_eta 0.01
 ```
 
+## Acknowledgements
+Base DQN code is based on the CSCE 642 in-class [codebase](https://github.com/Pi-Star-Lab/csce642-deepRL.git).
+
+Base ICM code is based on Curiosity-driven Exploration by Self-supervised Prediction [codebase](https://github.com/pathak22/noreward-rl.git).
