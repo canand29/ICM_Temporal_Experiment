@@ -177,7 +177,7 @@ class DQN(AbstractSolver):
         while True:
             action_probs = self.epsilon_greedy(state)
             action = np.random.choice(len(action_probs), p=action_probs)
-            next_state, reward, done, _, _ = self.env.step(action)
+            next_state, reward, done, _ = self.step(action)
             next_state = self.stack_frames(next_state, is_new_episode=False)
             self.memorize(state, action, reward, next_state, done)
             self.replay()

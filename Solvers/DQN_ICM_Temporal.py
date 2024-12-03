@@ -271,7 +271,7 @@ class DQN_ICM_Temporal(AbstractSolver):
         for _ in range(self.options.steps):
             action_probs = self.epsilon_greedy(state)
             action = np.random.choice(len(action_probs), p=action_probs)
-            next_state, reward, done, _, _ = self.env.step(action)
+            next_state, reward, done, _ = self.step(action)
             next_state = self.stack_frames(next_state, is_new_episode=False, frame_stack=self.frame_stack)
             self.memorize(state, action, reward, next_state, done, t)
             self.replay()
