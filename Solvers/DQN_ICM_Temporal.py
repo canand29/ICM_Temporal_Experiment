@@ -6,6 +6,11 @@
 # Contributors:
 # The core code base was developed by Guni Sharon (guni@tamu.edu).
 # The PyTorch code was developed by Sheelabhadra Dey (sheelabhadra@tamu.edu).
+# The logic for the ICM is based on Curiosity-driven Exploration by Self-supervised Prediction. The code is not directly taken from the codebase
+# The codebase was based in Python 3.6 and as such was outdated, and we revamped the code to work for Python 3.9
+# We also added the temporal feature and normalization as novel features ourselves.
+# The timestep addition was also something new as they only had a "done" signal for Mario once he reached the goal or ran out of time but did not have an explicit timestep limit
+
 
 import csv
 import random

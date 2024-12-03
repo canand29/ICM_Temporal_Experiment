@@ -6,7 +6,7 @@
 # Contributors:
 # The core code base was developed by Guni Sharon (guni@tamu.edu).
 # The PyTorch code was developed by Sheelabhadra Dey (sheelabhadra@tamu.edu).
-
+# The basis for this code base was from CSCE 642 we added an image input using CNN's for Atari environments
 import csv
 import random
 from copy import deepcopy
